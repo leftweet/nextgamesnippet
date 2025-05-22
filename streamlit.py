@@ -28,7 +28,7 @@ MLB_TEAMS = {
     "Minnesota Twins": ("MIN", "minnesota-twins", "Twins"),
     "New York Mets": ("NYM", "new-york-mets", "Mets"),
     "New York Yankees": ("NYY", "new-york-yankees", "Yankees"),
-    "Oakland Athletics": ("OAK", "oakland-athletics", "Athletics"),
+    "Athletics": ("ATH", "athletics", "Athletics"),
     "Philadelphia Phillies": ("PHI", "philadelphia-phillies", "Phillies"),
     "Pittsburgh Pirates": ("PIT", "pittsburgh-pirates", "Pirates"),
     "San Diego Padres": ("SD", "san-diego-padres", "Padres"),
