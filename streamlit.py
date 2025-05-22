@@ -5,7 +5,6 @@ import pandas as pd
 import google.generativeai as genai
 from datetime import datetime
 import re # For parsing time and opponent
-from st_copy_to_clipboard import st_copy_to_clipboard # Import the copy button
 
 # --- Configuration: MLB Teams Data ---
 # (Abbr, url_friendly_name, Mascot Name)
