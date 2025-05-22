@@ -4,8 +4,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import google.generativeai as genai
 from datetime import datetime
-import re
-import json # For robust JS string escaping
+import re # For parsing time and opponent
 
 # --- Configuration: MLB Teams Data ---
 # (Abbr, url_friendly_name, Mascot Name)
@@ -42,22 +41,28 @@ MLB_TEAMS = {
     "Washington Nationals": ("WSH", "washington-nationals", "Nationals"),
 }
 
+# For reverse lookup of abbreviation to full name and mascot
 MLB_TEAMS_BY_ABBR = {details[0]: (name, details[2]) for name, details in MLB_TEAMS.items()}
-HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
 
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
+# --- Gemini API Configuration ---
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest') # or 'gemini-pro'
 except KeyError:
     GEMINI_API_KEY = None
     gemini_model = None
-except Exception:
+    st.error("GEMINI_API_KEY not found in Streamlit secrets. Snippet generation will be disabled.")
+except Exception as e:
     GEMINI_API_KEY = None
     gemini_model = None
+    st.error(f"Error configuring Gemini API: {e}. Snippet generation will be disabled.")
 
-if not GEMINI_API_KEY or not gemini_model:
-    st.error("GEMINI_API_KEY not found/valid in Streamlit secrets or Gemini API configuration failed. AI snippet generation will be disabled.", icon="⚠️")
 
 def generate_team_url(team_abbr, team_url_name):
     return f"https://www.cbssports.com/mlb/teams/{team_abbr.upper()}/{team_url_name}/schedule/"
@@ -75,83 +80,202 @@ def get_starter_info(cell_td):
                 name_parts = name_slug.split('-')
                 capitalized_names = [part.capitalize() for part in name_parts]
                 full_name_from_url = " ".join(capitalized_names)
+
     cell_all_texts = list(cell_td.stripped_strings)
     for text_part in cell_all_texts:
         if text_part.startswith("(") and text_part.endswith(")"):
-            stats_text = text_part; break
-    if full_name_from_url: return f"{full_name_from_url} {stats_text}".strip()
-    original_text = " ".join(cell_all_texts); return original_text if original_text else "N/A"
+            stats_text = text_part
+            break
+    if full_name_from_url:
+        return f"{full_name_from_url} {stats_text}".strip()
+    else:
+        original_text = " ".join(cell_all_texts)
+        return original_text if original_text else "N/A"
 
 def scrape_team_schedule(team_url, team_display_name):
+    # ... (scraping logic remains largely the same) ...
     try:
-        response = requests.get(team_url, headers=HEADERS, timeout=15); response.raise_for_status()
-    except requests.exceptions.RequestException as e: st.error(f"Error fetching URL: {e}"); return None
+        response = requests.get(team_url, headers=HEADERS, timeout=15)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching URL for {team_display_name}: {team_url}\nDetails: {e}")
+        return None
+
     soup = BeautifulSoup(response.content, 'html.parser')
     tables = soup.find_all('table', class_='TableBase-table')
-    if not tables or len(tables) < 2: st.error(f"Could not find the required schedule table."); return None
+
+    if not tables:
+        st.error(f"No tables with class 'TableBase-table' found on the page for {team_display_name}.")
+        return None
+    
+    if len(tables) < 2:
+        st.error(f"Found {len(tables)} table(s) with class 'TableBase-table' for {team_display_name}, but expected at least 2. Cannot find the schedule table.")
+        return None
+
     schedule_table = tables[1]
     tbody = schedule_table.find('tbody')
-    if not tbody: st.error("Could not find table body."); return None
+    if not tbody:
+        st.error(f"Could not find a <tbody> in the schedule table for {team_display_name}.")
+        return None
+    
     first_data_row = tbody.find('tr')
-    if not first_data_row: st.error("No data rows found."); return None
+    if not first_data_row:
+        st.error(f"No data rows (<tr>) found in the <tbody> of the schedule table for {team_display_name}.")
+        return None
+
     cells = first_data_row.find_all('td')
+    
     if len(cells) < 6:
-        st.warning(f"Expected 6 cells, found {len(cells)}. Data might be incomplete.")
-        while len(cells) < 6: cells.append(BeautifulSoup("<td></td>", "html.parser").td)
+        st.warning(f"Warning: Expected at least 6 data cells in the row for {team_display_name}, but found {len(cells)}. Data might be incomplete.")
+        while len(cells) < 6: 
+            cells.append(BeautifulSoup("<td></td>", "html.parser").td)
+
+    date_val = " ".join(cells[0].get_text(separator=" ", strip=True).split())
+    opp_val_raw = " ".join(cells[1].get_text(separator=" ", strip=True).split()) # Keep raw for processing
+    time_tv_val_raw = " ".join(cells[2].get_text(separator=" ", strip=True).split()) # Keep raw
+    venue_val = " ".join(cells[3].get_text(separator=" ", strip=True).split())
+    
+    home_starter_val = get_starter_info(cells[4])
+    away_starter_val = get_starter_info(cells[5])
+
     return {
-        "Date": " ".join(cells[0].get_text(separator=" ", strip=True).split()),
-        "OPP_raw": " ".join(cells[1].get_text(separator=" ", strip=True).split()),
-        "Time_TV_raw": " ".join(cells[2].get_text(separator=" ", strip=True).split()),
-        "Venue": " ".join(cells[3].get_text(separator=" ", strip=True).split()),
-        "Home_starter": get_starter_info(cells[4]),
-        "Away_starter": get_starter_info(cells[5]),
-        "Scraped_team_full_name": team_display_name
+        "Date": date_val,
+        "OPP_raw": opp_val_raw, # Store raw opponent string
+        "Time_TV_raw": time_tv_val_raw, # Store raw time/TV string
+        "Venue": venue_val,
+        "Home_starter": home_starter_val,
+        "Away_starter": away_starter_val,
+        "Scraped_team_full_name": team_display_name # Add the name of the team we scraped FOR
     }
 
+
 def format_data_for_gemini_prompt(game_data, selected_team_info):
+    """
+    Formats the raw scraped game data according to specific rules for the Gemini prompt.
+    selected_team_info is a tuple: (abbr, url_name, mascot_name)
+    """
     formatted = {}
+
+    # 1. Date: Month and Date only (no year)
     try:
+        # Handle dates like "Mon, Mar 25" or "Mar 25, 2024" or "Mar 25"
         date_str = game_data['Date']
-        date_part = date_str.split(',')[1].strip() if ',' in date_str else date_str
-        if len(date_part.split()) > 2: date_part = " ".join(date_part.split()[:2])
+        if ',' in date_str:
+            date_part = date_str.split(',')[1].strip() # "Mar 25" or "Mar 25 2024"
+            if len(date_part.split()) > 2: # e.g. "Mar 25 2024"
+                 date_part = " ".join(date_part.split()[:2])
+        else: # "Mar 25"
+            date_part = date_str
+
         dt_obj = datetime.strptime(date_part, "%b %d")
         formatted['date'] = dt_obj.strftime("%B %d")
-    except: formatted['date'] = game_data['Date']
-    formatted['scraped_team_mascot'] = selected_team_info[2]
+    except ValueError:
+        formatted['date'] = game_data['Date'] # Fallback if parsing fails
+
+    # 2. Scraped Team: Mascot name only
+    formatted['scraped_team_mascot'] = selected_team_info[2] # Mascot name from MLB_TEAMS
+
+    # 3. Opponent: Full name
+    # game_data['OPP_raw'] might be "vs NYM", "@ ATL", "New York Mets"
     opp_raw = game_data['OPP_raw']
+    opponent_full_name = opp_raw # Default
+    
+    # Try to extract abbreviation like "NYM" from "vs NYM" or "@ NYM"
     match = re.search(r'(?:vs\.?|@)\s*([A-Z]{2,3})', opp_raw)
-    if match and match.group(1) in MLB_TEAMS_BY_ABBR: formatted['opponent_full_name'] = MLB_TEAMS_BY_ABBR[match.group(1)][0]
-    elif opp_raw.isupper() and len(opp_raw) in [2,3] and opp_raw in MLB_TEAMS_BY_ABBR: formatted['opponent_full_name'] = MLB_TEAMS_BY_ABBR[opp_raw][0]
-    else: formatted['opponent_full_name'] = opp_raw.replace("vs. ", "").replace("@ ", "").strip()
-    formatted['matchup_conjunction'] = "at" if "@" in opp_raw else "vs."
+    if match:
+        opp_abbr = match.group(1)
+        if opp_abbr in MLB_TEAMS_BY_ABBR:
+            opponent_full_name = MLB_TEAMS_BY_ABBR[opp_abbr][0] # Full name
+    elif opp_raw.isupper() and len(opp_raw) in [2,3] and opp_raw in MLB_TEAMS_BY_ABBR: # e.g. "NYM"
+        opponent_full_name = MLB_TEAMS_BY_ABBR[opp_raw][0]
+    else: # If it's already a full name or something else, clean it up
+        opponent_full_name = opp_raw.replace("vs. ", "").replace("@ ", "").strip()
+    formatted['opponent_full_name'] = opponent_full_name
+
+    # Determine if scraped team is home or away for "vs" or "at" phrasing
+    # If venue contains scraped team city/name OR "Home", they are home.
+    # This is a heuristic and might need refinement.
+    # For simplicity, let's check if the opponent string indicates away.
+    if "@" in opp_raw:
+        formatted['matchup_conjunction'] = "at"
+    else: # Assumed "vs" or home game
+        formatted['matchup_conjunction'] = "vs."
+
+
+    # 4. Time / TV
     time_tv_raw = game_data['Time_TV_raw']
-    time_match = re.search(r'(\d{1,2}:\d{2})\s*([apAP])\.?[mM]\.?', time_tv_raw) or re.search(r'(\d{1,2}:\d{2})([apAP])', time_tv_raw)
-    formatted['time'] = f"{time_match.group(1)} {time_match.group(2).lower()}.m. ET" if time_match else "TBD"
+    formatted_time = "TBD"
+    formatted_tv = "Not specified"
+
+    # Time: 0:00 p.m. ET
+    time_match = re.search(r'(\d{1,2}:\d{2})\s*([apAP])\.?[mM]\.?', time_tv_raw)
+    if not time_match: # try for "7:05p" format
+        time_match = re.search(r'(\d{1,2}:\d{2})([apAP])', time_tv_raw)
+
+    if time_match:
+        time_part = time_match.group(1)
+        am_pm = time_match.group(2).lower()
+        formatted_time = f"{time_part} {am_pm}.m. ET"
+    elif "TBD" in time_tv_raw.upper():
+        formatted_time = "TBD"
+    
+    # TV Channel replacements
     tv_replacements = {"ATV": "Apple TV", "AMZN": "Amazon", "MLBN": "MLB Network"}
-    potential_tv_str = time_tv_raw.split('/')[-1].strip() if "/" in time_tv_raw else (time_tv_raw if formatted['time'] == "TBD" and time_tv_raw != "TBD" else "")
-    if not potential_tv_str:
-        for part in time_tv_raw.split():
-            if not re.match(r'\d{1,2}:\d{2}',part) and part.lower() not in ['et', 'pm', 'am', 'p', 'a', 'p.m.', 'a.m.']: potential_tv_str = part; break
-    formatted['tv'] = tv_replacements.get(potential_tv_str.upper(), potential_tv_str) if potential_tv_str else "Not specified"
+    # Try to extract TV part (often after " / " or if time is TBD, the whole string)
+    if "/" in time_tv_raw:
+        potential_tv = time_tv_raw.split('/')[-1].strip()
+    elif formatted_time == "TBD" and time_tv_raw != "TBD":
+        potential_tv = time_tv_raw
+    else: # Attempt to find TV channel if not explicitly separated by /
+        parts = time_tv_raw.split()
+        potential_tv = ""
+        # Find part that isn't time and isn't ET
+        for part in parts:
+            if not re.match(r'\d{1,2}:\d{2}',part) and part.lower() not in ['et', 'pm', 'am', 'p', 'a', 'p.m.', 'a.m.']:
+                potential_tv = part
+                break
+    
+    if 'potential_tv' in locals() and potential_tv:
+        for short, long_name in tv_replacements.items():
+            potential_tv = potential_tv.replace(short, long_name)
+        formatted_tv = potential_tv
+    
+    formatted['time'] = formatted_time
+    formatted['tv'] = formatted_tv
+
+    # 5. Venue, Starters (pass through if not N/A or TBD, Gemini can choose to include)
     formatted['venue'] = game_data['Venue'] if game_data['Venue'] not in ["TBD", "N/A", ""] else "Venue TBD"
-    home_starter = game_data['Home_starter'] if game_data['Home_starter'] not in ["TBD", "N/A", ""] else "Starter TBD"
-    away_starter = game_data['Away_starter'] if game_data['Away_starter'] not in ["TBD", "N/A", ""] else "Starter TBD"
-    formatted['scraped_team_starter'] = home_starter if formatted['matchup_conjunction'] == "vs." else away_starter
-    formatted['opponent_starter'] = away_starter if formatted['matchup_conjunction'] == "vs." else home_starter
+    formatted['home_starter'] = game_data['Home_starter'] if game_data['Home_starter'] not in ["TBD", "N/A", ""] else "Starter TBD"
+    formatted['away_starter'] = game_data['Away_starter'] if game_data['Away_starter'] not in ["TBD", "N/A", ""] else "Starter TBD"
+    
+    # Determine which starter belongs to the scraped team
+    if formatted['matchup_conjunction'] == "vs.": # Scraped team is home
+        formatted['scraped_team_starter'] = formatted['home_starter']
+        formatted['opponent_starter'] = formatted['away_starter']
+    else: # Scraped team is away
+        formatted['scraped_team_starter'] = formatted['away_starter']
+        formatted['opponent_starter'] = formatted['home_starter']
+
+
     return formatted
 
 def generate_game_snippet(formatted_game_data):
-    if not gemini_model: return "Gemini API not configured. Cannot generate snippet."
+    if not gemini_model:
+        return "Gemini API not configured. Cannot generate snippet."
+
+    # Construct the prompt
     prompt = f"""
-    You are an expert sports journalist AI. Generate a 1-2 sentence snippet summarizing the upcoming MLB game.
-    Tone: human-like, professional, suitable for a news article.
-    Formatting Rules:
-    - Date: Month and Day (e.g., "July 4").
-    - Scraped Team: Mascot name only (e.g., "Phillies").
-    - Opponent: Full team name (e.g., "New York Mets").
-    - Game Time: "0:00 p.m. ET" or "0:00 a.m. ET". If TBD, state that.
-    - TV Channel: Full names: "Apple TV" for ATV, "Amazon" for AMZN, "MLB Network" for MLBN. If other, use as provided. If not specified, omit TV info or say "check local listings".
-    - Punctuation: End sentences with a period. Avoid semicolons; use periods.
+    You are an expert sports journalist AI.
+    Generate a 1-2 sentence snippet summarizing the following upcoming MLB game.
+    The tone should be human-like and professional, suitable for embedding directly into a news article.
+    Follow these specific formatting and content rules:
+    - Date: Month and Day only (e.g., "July 4").
+    - Scraped Team: Use only the mascot name (e.g., "Phillies").
+    - Opponent: Use the opponent's full team name (e.g., "New York Mets").
+    - Game Time: Format as "0:00 p.m. ET" or "0:00 a.m. ET". If time is TBD, state that.
+    - TV Channel: Use full names: "Apple TV" for ATV, "Amazon" for AMZN, "MLB Network" for MLBN. If other, use as provided. If not specified, omit TV info or say "check local listings".
+    - Punctuation: Ensure all sentences end with a period. Avoid using semicolons; use periods to separate distinct clauses or before phrases like "check local listings".
+
     Game Details:
     - Date: {formatted_game_data['date']}
     - Scraped Team: {formatted_game_data['scraped_team_mascot']}
@@ -162,37 +286,55 @@ def generate_game_snippet(formatted_game_data):
     - Venue: {formatted_game_data['venue']}
     - Scraped Team Starter: {formatted_game_data['scraped_team_starter']}
     - Opponent Starter: {formatted_game_data['opponent_starter']}
-    Snippet (1-2 sentences, using periods instead of semicolons):
-    """
-    try:
-        response = gemini_model.generate_content(prompt)
-        if response.parts: return response.text.strip()
-        if response.candidates and response.candidates[0].finish_reason == 'SAFETY':
-            safety_feedback = f" Details: {response.prompt_feedback.safety_ratings}" if response.prompt_feedback and response.prompt_feedback.safety_ratings else ""
-            return f"Snippet generation failed (safety).{safety_feedback}"
-        return "Gemini returned an empty/blocked response."
-    except Exception as e: return f"Error generating snippet with Gemini: {e}"
 
+    Snippet (1-2 sentences, using periods instead of semicolons)::
+    """
+
+    try:
+        # st.write("Sending prompt to Gemini:") # For debugging
+        # st.text(prompt)
+        response = gemini_model.generate_content(prompt)
+        if response.parts:
+            return response.text.strip()
+        else: # Handle cases where response might be blocked or empty
+            candidate = response.candidates[0]
+            if candidate.finish_reason == 'SAFETY':
+                return "Snippet generation failed due to safety settings. Please check the input data."
+            return "Gemini returned an empty response."
+    except Exception as e:
+        return f"Error generating snippet with Gemini: {e}"
+
+
+# --- Streamlit App UI ---
 st.set_page_config(page_title="MLB Team Schedule Scraper", layout="wide")
 st.title("⚾ MLB Team Schedule Scraper")
 st.markdown("Select an MLB team and click 'Scrape' to get the next game's info and an AI-generated snippet.")
 
 sorted_team_names = sorted(MLB_TEAMS.keys())
 options = ["-- Select a Team --"] + sorted_team_names
-selected_team_display_name = st.selectbox("Choose an MLB Team:", options=options, index=0)
+selected_team_display_name = st.selectbox(
+    "Choose an MLB Team:",
+    options=options,
+    index=0
+)
 
 if selected_team_display_name != "-- Select a Team --":
     team_abbr, team_url_name, team_mascot = MLB_TEAMS[selected_team_display_name]
-    selected_team_info = MLB_TEAMS[selected_team_display_name]
+    selected_team_info = MLB_TEAMS[selected_team_display_name] # Pass (abbr, url_name, mascot)
     target_url = generate_team_url(team_abbr, team_url_name)
+    
     st.markdown(f"**Scraping for:** {selected_team_display_name}")
     st.caption(f"URL to be scraped: [{target_url}]({target_url})")
 
     if st.button(f"Scrape Next Game Info for {selected_team_display_name}"):
+        game_data_raw = None
         with st.spinner(f"Scraping CBS Sports for {selected_team_display_name} schedule..."):
             game_data_raw = scrape_team_schedule(target_url, selected_team_display_name)
+
         if game_data_raw:
             st.success(f"Successfully scraped data for {selected_team_display_name}!")
+            
+            # Display raw scraped data as before
             st.subheader(f"First Listed Game Details (Scraped):")
             st.markdown(f"**Date:** {game_data_raw['Date']}")
             st.markdown(f"**OPP (raw):** {game_data_raw['OPP_raw']}")
@@ -201,75 +343,21 @@ if selected_team_display_name != "-- Select a Team --":
             st.markdown(f"**Home starter:** {game_data_raw['Home_starter']}")
             st.markdown(f"**Away starter:** {game_data_raw['Away_starter']}")
             st.markdown("---")
+
+            # Generate and display Gemini snippet
             if GEMINI_API_KEY and gemini_model:
                 st.subheader("AI-Generated Game Snippet:")
                 with st.spinner("Formatting data and generating snippet with Gemini..."):
                     formatted_data = format_data_for_gemini_prompt(game_data_raw, selected_team_info)
+                    # st.write("Formatted data for prompt:", formatted_data) # For debugging
                     snippet = generate_game_snippet(formatted_data)
-                if snippet and not snippet.startswith("Error") and not snippet.startswith("Gemini API not configured") and not snippet.startswith("Snippet generation failed"):
-                    # --- HTML/JS Copy Button (Improved) ---
-                    # Create unique IDs to prevent conflicts if multiple buttons exist
-                    unique_id_suffix = str(hash(snippet)) # Use hash of snippet for more uniqueness
-                    button_id = f"copyBtn_{unique_id_suffix}"
-                    msg_id = f"copyMsg_{unique_id_suffix}"
-                    
-                    # Use json.dumps for robust JavaScript string escaping.
-                    # It produces a valid JSON string, which is also a valid JS string literal.
-                    # We then slice off the surrounding double quotes that json.dumps adds.
-                    text_to_copy_js_escaped = json.dumps(snippet)[1:-1]
+                st.markdown(f"> {snippet}")
+            else:
+                st.warning("Gemini API not configured. Snippet cannot be generated.")
+        else:
+            st.warning(f"Could not retrieve game data for {selected_team_display_name}. Check error messages.")
+else:
+    st.info("Please select an MLB team from the dropdown above to begin.")
 
-                    copy_button_html = f"""
-                        <div style="margin-bottom: 10px;">
-                            <button id="{button_id}">📋 Copy Snippet</button>
-                            <span id="{msg_id}" style="margin-left: 10px; font-size: 0.9em;"></span>
-                        </div>
-                        <script>
-                        (function() {{ // IIFE to avoid polluting global scope and ensure code runs after element exists
-                            const btn = document.getElementById('{button_id}');
-                            const msgSpan = document.getElementById('{msg_id}');
-                            const textToCopy = "{text_to_copy_js_escaped}"; // Injected escaped text
-
-                            if (btn && msgSpan) {{
-                                btn.addEventListener('click', async function() {{
-                                    console.log("Copy button '{button_id}' clicked. Attempting to copy:", textToCopy);
-                                    if (!navigator.clipboard) {{
-                                        msgSpan.innerText = 'Clipboard API not available.';
-                                        msgSpan.style.color = 'red';
-                                        console.error('navigator.clipboard API not supported by this browser.');
-                                        setTimeout(() => {{ msgSpan.innerText = ''; }}, 3000);
-                                        return;
-                                    }}
-                                    try {{
-                                        await navigator.clipboard.writeText(textToCopy);
-                                        msgSpan.innerText = 'Copied!';
-                                        msgSpan.style.color = 'green';
-                                        console.log('Text copied to clipboard successfully!');
-                                    }} catch (err) {{
-                                        msgSpan.innerText = 'Failed to copy.';
-                                        msgSpan.style.color = 'red';
-                                        console.error('Failed to copy text using navigator.clipboard.writeText: ', err);
-                                        // Log detailed error object
-                                        console.error('Error name:', err.name, 'Error message:', err.message);
-                                    }} finally {{
-                                        setTimeout(() => {{
-                                            msgSpan.innerText = '';
-                                            msgSpan.style.color = 'green'; // Reset color
-                                        }}, 3000);
-                                    }}
-                                }});
-                            }} else {{
-                                if (!btn) console.error("Copy button with ID '{button_id}' not found.");
-                                if (!msgSpan) console.error("Message span with ID '{msg_id}' not found.");
-                            }}
-                        }})();
-                        </script>
-                    """
-                    st.html(copy_button_html)
-                    # --- End HTML/JS Copy Button ---
-                    st.markdown(f"> {snippet}")
-                else: st.warning(snippet)
-            else: st.warning("Gemini API not configured. AI Snippet cannot be generated.")
-        else: st.warning(f"Could not retrieve game data for {selected_team_display_name}. Check error messages.")
-else: st.info("Please select an MLB team from the dropdown above to begin.")
 st.markdown("---")
 st.caption("Note: Web scraping can be unreliable. AI snippets are generated by Google Gemini.")
