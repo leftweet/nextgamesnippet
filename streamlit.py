@@ -335,7 +335,7 @@ if selected_team_display_name != "-- Select a Team --":
             st.success(f"Successfully scraped data for {selected_team_display_name}!")
             
             # Display raw scraped data as before
-            st.subheader(f"First Listed Game Details (Scraped):")
+            st.subheader(f"Next Game Details:")
             st.markdown(f"**Date:** {game_data_raw['Date']}")
             st.markdown(f"**OPP (raw):** {game_data_raw['OPP_raw']}")
             st.markdown(f"**Time / TV (raw):** {game_data_raw['Time_TV_raw']}")
