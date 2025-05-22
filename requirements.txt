@@ -4,4 +4,3 @@ beautifulsoup4
 pandas
 lxml
 google-generativeai
-streamlit-copy-button
