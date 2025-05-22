@@ -93,7 +93,6 @@ def get_starter_info(cell_td):
         return original_text if original_text else "N/A"
 
 def scrape_team_schedule(team_url, team_display_name):
-    # ... (scraping logic remains largely the same) ...
     try:
         response = requests.get(team_url, headers=HEADERS, timeout=15)
         response.raise_for_status()
@@ -118,35 +117,61 @@ def scrape_team_schedule(team_url, team_display_name):
         st.error(f"Could not find a <tbody> in the schedule table for {team_display_name}.")
         return None
     
-    first_data_row = tbody.find('tr')
-    if not first_data_row:
+    all_data_rows = tbody.find_all('tr')
+    if not all_data_rows:
         st.error(f"No data rows (<tr>) found in the <tbody> of the schedule table for {team_display_name}.")
         return None
 
-    cells = first_data_row.find_all('td')
-    
-    if len(cells) < 6:
-        st.warning(f"Warning: Expected at least 6 data cells in the row for {team_display_name}, but found {len(cells)}. Data might be incomplete.")
-        while len(cells) < 6: 
-            cells.append(BeautifulSoup("<td></td>", "html.parser").td)
+    game_to_process = None # This will store the data of the first valid upcoming game
 
-    date_val = " ".join(cells[0].get_text(separator=" ", strip=True).split())
-    opp_val_raw = " ".join(cells[1].get_text(separator=" ", strip=True).split()) # Keep raw for processing
-    time_tv_val_raw = " ".join(cells[2].get_text(separator=" ", strip=True).split()) # Keep raw
-    venue_val = " ".join(cells[3].get_text(separator=" ", strip=True).split())
-    
-    home_starter_val = get_starter_info(cells[4])
-    away_starter_val = get_starter_info(cells[5])
+    for row_idx, row in enumerate(all_data_rows):
+        cells = row.find_all('td')
+        
+        # Need at least 3 cells for Date, Opponent, Time/TV
+        if len(cells) < 3:
+            # st.info(f"Row {row_idx+1} has too few cells ({len(cells)}), skipping.") # Optional: for debugging
+            continue
 
-    return {
-        "Date": date_val,
-        "OPP_raw": opp_val_raw, # Store raw opponent string
-        "Time_TV_raw": time_tv_val_raw, # Store raw time/TV string
-        "Venue": venue_val,
-        "Home_starter": home_starter_val,
-        "Away_starter": away_starter_val,
-        "Scraped_team_full_name": team_display_name # Add the name of the team we scraped FOR
-    }
+        time_tv_val_raw = " ".join(cells[2].get_text(separator=" ", strip=True).split())
+
+        if is_game_not_upcoming(time_tv_val_raw):
+            st.write(f"ℹ️ Game in row {row_idx+1} ('{time_tv_val_raw}') seems to be in progress, final, or postponed. Checking next row...")
+            continue # Skip to the next row
+        
+        # If we reach here, this row is the next upcoming game
+        # Ensure we have enough cells for all data points
+        if len(cells) < 6:
+            st.warning(f"Warning: Upcoming game in row {row_idx+1} has fewer than 6 cells ({len(cells)} found). Data might be incomplete. Cells: {[c.get_text(strip=True) for c in cells]}")
+            # Pad with empty cell content if necessary, so subsequent processing doesn't fail
+            while len(cells) < 6:
+                empty_td_soup = BeautifulSoup("<td></td>", "html.parser")
+                cells.append(empty_td_soup.td)
+        
+        date_val = " ".join(cells[0].get_text(separator=" ", strip=True).split())
+        opp_val_raw = " ".join(cells[1].get_text(separator=" ", strip=True).split())
+        # time_tv_val_raw is already extracted and is for the upcoming game
+        venue_val = " ".join(cells[3].get_text(separator=" ", strip=True).split())
+        
+        home_starter_val = get_starter_info(cells[4])
+        away_starter_val = get_starter_info(cells[5])
+
+        game_to_process = {
+            "Date": date_val,
+            "OPP_raw": opp_val_raw,
+            "Time_TV_raw": time_tv_val_raw, # This is the one for the upcoming game
+            "Venue": venue_val,
+            "Home_starter": home_starter_val,
+            "Away_starter": away_starter_val,
+            "Scraped_team_full_name": team_display_name
+        }
+        st.write(f"✅ Found next upcoming game in row {row_idx+1}: '{time_tv_val_raw}'")
+        break # Exit the loop since we found our game
+
+    if not game_to_process:
+        st.warning(f"No suitable upcoming (non-in-progress/final/PPD) games found for {team_display_name} in the schedule.")
+        return None
+
+    return game_to_process
 
 
 def format_data_for_gemini_prompt(game_data, selected_team_info):
