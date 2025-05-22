@@ -336,6 +336,7 @@ def generate_game_snippet(formatted_game_data):
     - Punctuation: Ensure all sentences end with a period. Avoid using semicolons; use periods to separate distinct clauses or before phrases like "check local listings".
     - For the Athletics only use team name. Do not mention Oakland.
     - Avoid bias or opinionated descriptors like "pivotal" or "crucial".
+    - Start the snippet with a phrase that introduces that this is the next game (such as "Next up" or "The Phillies next face...", etc.)
 
     Game Details:
     - Date: {formatted_game_data['date']}
