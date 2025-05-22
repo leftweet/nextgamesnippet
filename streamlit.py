@@ -275,6 +275,7 @@ def generate_game_snippet(formatted_game_data):
     - Game Time: Format as "0:00 p.m. ET" or "0:00 a.m. ET". If time is TBD, state that.
     - TV Channel: Use full names: "Apple TV" for ATV, "Amazon" for AMZN, "MLB Network" for MLBN. If other, use as provided. If not specified, omit TV info or say "check local listings".
     - Punctuation: Ensure all sentences end with a period. Avoid using semicolons; use periods to separate distinct clauses or before phrases like "check local listings".
+    - For the Athletics only use team name. Do not mention Oakland.
 
     Game Details:
     - Date: {formatted_game_data['date']}
