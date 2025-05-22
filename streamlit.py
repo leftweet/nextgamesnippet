@@ -286,6 +286,12 @@ st.set_page_config(page_title="MLB Team Schedule Scraper", layout="wide")
 st.title("⚾ MLB Team Schedule Scraper")
 st.markdown("Select an MLB team and click 'Scrape' to get the next game's info and an AI-generated snippet.")
 
+# Remove the import for st_copy_to_clipboard if you're using the HTML/JS method
+# from st_copy_to_clipboard import st_copy_to_clipboard 
+
+if not GEMINI_API_KEY or not gemini_model: # Moved Gemini check to the top
+    st.error("GEMINI_API_KEY not found in Streamlit secrets or Gemini API configuration failed. AI snippet generation will be disabled.", icon="⚠️")
+
 sorted_team_names = sorted(MLB_TEAMS.keys())
 options = ["-- Select a Team --"] + sorted_team_names
 selected_team_display_name = st.selectbox(
@@ -296,9 +302,9 @@ selected_team_display_name = st.selectbox(
 
 if selected_team_display_name != "-- Select a Team --":
     team_abbr, team_url_name, team_mascot = MLB_TEAMS[selected_team_display_name]
-    selected_team_info = MLB_TEAMS[selected_team_display_name] 
+    selected_team_info = MLB_TEAMS[selected_team_display_name]
     target_url = generate_team_url(team_abbr, team_url_name)
-    
+
     st.markdown(f"**Scraping for:** {selected_team_display_name}")
     st.caption(f"URL to be scraped: [{target_url}]({target_url})")
 
@@ -309,7 +315,7 @@ if selected_team_display_name != "-- Select a Team --":
 
         if game_data_raw:
             st.success(f"Successfully scraped data for {selected_team_display_name}!")
-            
+
             st.subheader(f"First Listed Game Details (Scraped):")
             st.markdown(f"**Date:** {game_data_raw['Date']}")
             st.markdown(f"**OPP (raw):** {game_data_raw['OPP_raw']}")
@@ -324,16 +330,43 @@ if selected_team_display_name != "-- Select a Team --":
                 with st.spinner("Formatting data and generating snippet with Gemini..."):
                     formatted_data = format_data_for_gemini_prompt(game_data_raw, selected_team_info)
                     snippet = generate_game_snippet(formatted_data)
-                
-                # Only show copy button and snippet if snippet generation was successful
+
                 if snippet and not snippet.startswith("Error generating snippet") and not snippet.startswith("Gemini API not configured") and not snippet.startswith("Snippet generation failed"):
-                    st_copy_to_clipboard(snippet, 
-                                         button_text="📋 Copy Snippet", 
-                                         success_message="Snippet copied to clipboard!", 
-                                         key="copy_snippet_button") # Unique key is good practice
-                    st.markdown(f"> {snippet}")
-                else: # If snippet generation had an issue, display the error/warning message
-                    st.warning(snippet) 
+                    
+                    # --- HTML/JS Copy Button ---
+                    # Create a unique ID for the text area if you have multiple copy buttons
+                    text_area_id = "snippet_text_to_copy" 
+                    
+                    # JavaScript to copy text
+                    # The text_to_copy_js variable will hold the snippet, properly escaped for JS
+                    text_to_copy_js = snippet.replace('\\', '\\\\').replace("'", "\\'").replace('"', '\\"').replace('\n', '\\n').replace('\r', '')
+
+                    copy_button_html = f"""
+                        <div style="margin-bottom: 5px;">
+                            <button id="copyBtn_{text_area_id}" onclick="copyToClipboard_{text_area_id}()">📋 Copy Snippet</button>
+                            <span id="copyMsg_{text_area_id}" style="margin-left: 10px; color: green; font-size: 0.9em;"></span>
+                        </div>
+                        <script>
+                        async function copyToClipboard_{text_area_id}() {{
+                            const textToCopy = '{text_to_copy_js}';
+                            try {{
+                                await navigator.clipboard.writeText(textToCopy);
+                                document.getElementById('copyMsg_{text_area_id}').innerText = 'Copied!';
+                                setTimeout(() => {{ document.getElementById('copyMsg_{text_area_id}').innerText = ''; }}, 2000);
+                            }} catch (err) {{
+                                console.error('Failed to copy text: ', err);
+                                document.getElementById('copyMsg_{text_area_id}').innerText = 'Failed to copy!';
+                                setTimeout(() => {{ document.getElementById('copyMsg_{text_area_id}').innerText = ''; }}, 2000);
+                            }}
+                        }}
+                        </script>
+                    """
+                    st.html(copy_button_html)
+                    # --- End HTML/JS Copy Button ---
+                    
+                    st.markdown(f"> {snippet}") # Display the snippet itself
+                else:
+                    st.warning(snippet)
             else:
                 st.warning("Gemini API not configured. AI Snippet cannot be generated.")
         else:
