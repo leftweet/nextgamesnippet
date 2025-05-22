@@ -44,27 +44,53 @@ HEADERS = {
 def generate_team_url(team_abbr, team_url_name):
     return f"https://www.cbssports.com/mlb/teams/{team_abbr.upper()}/{team_url_name}/schedule/"
 
-def extract_player_name_from_url(cell_td):
+def get_starter_info(cell_td):
     """
-    Attempts to extract a player's full name from a URL within a table cell.
-    The URL is expected to be in the format like /mlb/players/PLAYERID/firstname-lastname/
-    Returns the formatted name (e.g., "Firstname Lastname") or None if not found/parsable.
+    Extracts starter information:
+    - Tries to get the full name from a player link URL.
+    - Preserves stats found in parentheses (e.g., "(W-L, ERA)").
+    - Falls back to the cell's text content if no link or if it's "TBD".
     """
+    full_name_from_url = None
+    stats_text = ""
+
+    # 1. Try to get full name from player link URL
     link_tag = cell_td.find('a')
     if link_tag and link_tag.has_attr('href'):
         player_url_path = link_tag['href']
-        # Example: /mlb/players/2210237/german-marquez/
+        # Expected format: /mlb/players/PLAYERID/firstname-lastname/
         path_segments = player_url_path.strip('/').split('/')
         
         if len(path_segments) > 0:
-            name_slug = path_segments[-1] # The last segment should be 'firstname-lastname'
-            # Basic validation that it looks like a name slug
+            name_slug = path_segments[-1] # Last segment is firstname-lastname
+            # Basic validation
             if '-' in name_slug and all(c.isalnum() or c == '-' for c in name_slug):
                 name_parts = name_slug.split('-')
-                # Capitalize each part (e.g., first name, last name)
                 capitalized_names = [part.capitalize() for part in name_parts]
-                return " ".join(capitalized_names)
-    return None
+                full_name_from_url = " ".join(capitalized_names)
+
+    # 2. Get all text parts from the cell, looking for stats
+    # .stripped_strings helps get individual text nodes without extra whitespace.
+    cell_all_texts = list(cell_td.stripped_strings)
+    
+    # 3. Find stats (text in parentheses)
+    # The stats are often in a separate text node or span after the <a> tag.
+    for text_part in cell_all_texts:
+        if text_part.startswith("(") and text_part.endswith(")"):
+            stats_text = text_part
+            break # Assume first parenthetical is the stats
+
+    # 4. Combine name and stats
+    if full_name_from_url:
+        if stats_text:
+            return f"{full_name_from_url} {stats_text}"
+        else:
+            return full_name_from_url # Return just name if no stats found
+    else:
+        # If no name from URL (e.g., "TBD" or empty cell), return the joined original cell text.
+        original_text = " ".join(cell_all_texts)
+        return original_text if original_text else "N/A"
+
 
 def scrape_team_schedule(team_url, team_display_name):
     try:
@@ -101,28 +127,16 @@ def scrape_team_schedule(team_url, team_display_name):
     if len(cells) < 6:
         st.warning(f"Warning: Expected at least 6 data cells in the row for {team_display_name}, but found {len(cells)}. Data might be incomplete.")
         while len(cells) < 6: # Pad with empty td to avoid IndexError
-            cells.append(BeautifulSoup("<td></td>", "html.parser").td)
+            cells.append(BeautifulSoup("<td></td>", "html.parser").td) # Create an empty td tag
 
     date_val = " ".join(cells[0].get_text(separator=" ", strip=True).split())
     opp_val = " ".join(cells[1].get_text(separator=" ", strip=True).split())
     time_tv_val = " ".join(cells[2].get_text(separator=" ", strip=True).split())
     venue_val = " ".join(cells[3].get_text(separator=" ", strip=True).split())
     
-    # Home Starter
-    home_starter_full_name = extract_player_name_from_url(cells[4])
-    if home_starter_full_name:
-        home_starter_val = home_starter_full_name
-    else:
-        home_starter_val = " ".join(cells[4].get_text(separator=" ", strip=True).split())
-        if not home_starter_val: home_starter_val = "N/A"
-        
-    # Away Starter
-    away_starter_full_name = extract_player_name_from_url(cells[5])
-    if away_starter_full_name:
-        away_starter_val = away_starter_full_name
-    else:
-        away_starter_val = " ".join(cells[5].get_text(separator=" ", strip=True).split())
-        if not away_starter_val: away_starter_val = "N/A"
+    # Home Starter & Away Starter using the new helper function
+    home_starter_val = get_starter_info(cells[4])
+    away_starter_val = get_starter_info(cells[5])
 
     return {
         "Date": date_val,
