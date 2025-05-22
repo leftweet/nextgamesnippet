@@ -91,7 +91,43 @@ def get_starter_info(cell_td):
     else:
         original_text = " ".join(cell_all_texts)
         return original_text if original_text else "N/A"
+# Helper function to determine if a game is not upcoming (i.e., in progress, final, PPD, etc.)
+def is_game_not_upcoming(time_tv_str):
+    """
+    Checks if the time_tv_str indicates a game is in progress, final, postponed, etc.
+    Returns True if the game is NOT upcoming, False otherwise.
+    """
+    # Case insensitive search for these patterns
 
+    # Pattern 1: Scores (e.g., "TEAM1 X, TEAM2 Y" or "TEAM1 X - TEAM2 Y")
+    # Example: "ATH 2, LAA 0 - 2nd" or "PHI 5 - NYM 1"
+    if re.search(r'\b[A-Z]{2,4}\s+\d+\s*(?:,|\s*-\s*)\s*[A-Z]{2,4}\s+\d+', time_tv_str, re.IGNORECASE):
+        return True
+
+    # Pattern 2: Explicit game status words
+    # Example: "Final", "PPD", "Live", "In Progress", "Delayed", "Suspended", "Cancelled"
+    # We also look for inning indicators if they are not part of a simple time string.
+    # Example: "Top 5th", "Bot 3rd", "- 2nd", "Mid 7"
+    status_keywords = r'\b(Final|F(?:/\d+)?|PPD|Postponed|Cancelled|Canceled|Suspended|Delayed|Live|In\s*Progress)\b'
+    inning_indicators = r'(?:-\s*|\b)([1-9]\d*(?:st|nd|rd|th)|[Tt]op\s*\d+|[Bb]ot\s*\d+|[Mm]id\s*\d+)\b'
+
+    if re.search(status_keywords, time_tv_str, re.IGNORECASE):
+        return True
+    
+    # If an inning indicator is present AND it's not clearly part of a scheduled time
+    # (e.g., to avoid matching "7:00 PM 4th street" if that were a venue, though unlikely in this cell)
+    # A simple check: if inning indicator exists and no clear PM/AM time, assume status.
+    if re.search(inning_indicators, time_tv_str, re.IGNORECASE):
+        # If it does NOT look like a standard future time string (e.g., "7:05 PM ET")
+        # then an inning indicator likely means it's in progress.
+        if not re.search(r'\d{1,2}:\d{2}\s*(?:[AP]\.?M\.?)\s*(?:[ECMP][SD]?T)?', time_tv_str, re.IGNORECASE):
+            return True
+        # If it looks like a future time but also contains a clear status word (handled by status_keywords)
+        # like "7:05 PM ET - PPD", it's already caught.
+        # This is for more ambiguous cases like "Bot 7th" alone.
+
+    return False # Otherwise, assume it's an upcoming game (or just a time like "7:05 PM ET" or "TBD")
+    
 def scrape_team_schedule(team_url, team_display_name):
     try:
         response = requests.get(team_url, headers=HEADERS, timeout=15)
