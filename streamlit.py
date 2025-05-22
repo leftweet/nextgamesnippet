@@ -169,6 +169,10 @@ def scrape_team_schedule(team_url, team_display_name):
             continue
 
         time_tv_val_raw = " ".join(cells[2].get_text(separator=" ", strip=True).split())
+
+        if is_game_not_upcoming(time_tv_val_raw):
+            st.write(f"ℹ️ Game in row {row_idx+1} ('{time_tv_val_raw}') seems to be in progress, final, or postponed. Checking next row...")
+            continue # Skip to the next row
         
         # If we reach here, this row is the next upcoming game
         # Ensure we have enough cells for all data points
