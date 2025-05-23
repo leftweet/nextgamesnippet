@@ -394,7 +394,7 @@ if selected_team_display_name != "-- Select a Team --":
             game_data_raw = scrape_team_schedule(target_url, selected_team_display_name)
 
         if game_data_raw:
-            st.success(f"Successfully scraped data for {selected_team_display_name}!")
+            st.success(f"Successfully scraped data for the {selected_team_display_name}!")
             
             # Display raw scraped data as before
             st.subheader(f"Next Game Details:")
