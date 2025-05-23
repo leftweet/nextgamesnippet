@@ -375,7 +375,7 @@ st.markdown("Select an MLB team and click 'Generate' to get the next game's info
 sorted_team_names = sorted(MLB_TEAMS.keys())
 options = ["-- Select a Team --"] + sorted_team_names
 selected_team_display_name = st.selectbox(
-    "Choose an MLB Team:",
+    "",
     options=options,
     index=0
 )
